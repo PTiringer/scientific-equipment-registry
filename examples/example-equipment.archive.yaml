@@ -1,0 +1,12 @@
+data:
+  m_def: nomad_equipment_registry.schema.EquipmentRecord
+  equipment_id: DEMO-EQ-001
+  equipment_name: Bench oscilloscope
+  category: Instrument
+  manufacturer_model: Example Instruments Scope 2000
+  serial_inventory_number: Demo inventory number 001
+  department: Research Engineering
+  location: Building A, room 210
+  status: In use
+  equipment_group: Electronics bench
+  accessories_notes: Two passive probes and a power cable.

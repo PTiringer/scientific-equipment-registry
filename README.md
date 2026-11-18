@@ -1,121 +1,92 @@
-# scientific-equipment-registry
+# Scientific Equipment Registry
 
-This is the registry plugin to keep track of all scientific equipments used at the mpi cbs
+A NOMAD Oasis plugin for NOMAD 1.4.1 and later with an equipment ELN schema and a dedicated Explore app. Each NOMAD entry represents one item. The app appears beside Scientific Staff in the CBS group. Its dashboard provides quick filters for equipment name, department, category, and status. The sidebar also provides equipment ID, location, equipment group, and visibility filters.
 
-This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`cookiecutter-nomad-plugin`](https://github.com/FAIRmat-NFDI/cookiecutter-nomad-plugin) template.
+## Install in NOMAD Oasis
 
-## Development
+Install this package in the Python environment that runs NOMAD. From the root of the extracted package, run:
 
-If you want to develop locally this plugin, clone the project and in the plugin folder, create a virtual environment (you can use Python 3.10, 3.11 or 3.12):
 ```sh
-git clone https://github.com/PTiringer/scientific-equipment-registry.git
-cd scientific-equipment-registry
-python3.11 -m venv .pyenv
-. .pyenv/bin/activate
+python -m pip install --no-deps .
 ```
 
-Make sure to have `pip` upgraded:
-```sh
-pip install --upgrade pip
+For a container deployment, add the package to the NOMAD image build so the app and worker both use the same plugin version. Rebuild and restart them on the test Oasis first. If the deployment explicitly restricts enabled plugins, add these entry points to its existing `plugins.include` list:
+
+```text
+nomad_equipment_registry:equipment_schema
+nomad_equipment_registry.app:equipment_app
 ```
 
-We recommend installing `uv` for fast pip installation of the packages:
-```sh
-pip install uv
+Create an entry from the **Equipment record** template in a NOMAD upload, or upload `examples/example-equipment.archive.yaml` to try the registry. Open **Explore → CBS → Scientific Equipment Registry** and use **Filters → Visibility** to select a scope that includes your test upload. NOMAD's upload permissions govern access to each record. For an internal registry, keep uploads unpublished and share them with the intended users or groups.
+
+## Maintain records
+
+- Use an institution-assigned equipment ID. The registry administrator must ensure IDs are unique and keep them stable. This version leaves enforcement of uniqueness and immutability to the institution.
+- Department and location are text fields. Use consistent spelling to keep each department or location under a single filter value.
+- Owners and contacts are selected from NOMAD user accounts. Current owner is maintained independently of the primary ownership history.
+- To transfer primary responsibility, enter the old assignment's last day and add a new assignment with its start day, project description, and recorded-on timestamp. The top-level **Primary owner** is populated from the single open assignment. Leave the end date blank for that assignment only. Dates are treated as inclusive.
+- Missing required values, overlapping or reversed ownership periods, multiple open assignments, and incomplete contacts generate processing warnings. NOMAD can still save incomplete drafts. Recorded on is an editable timestamp rather than an audit log.
+
+## Smoke check on test Oasis
+
+1. Create or upload the example record. Confirm the Explore app shows the row and that the status and category filters find it.
+2. Select a NOMAD user and fill in a primary ownership period. Save and verify the top-level primary owner in the entry data.
+3. Close the period and create a new open period with a different owner. Save and verify the owner changes and both periods remain visible.
+4. Verify that another intended registry user can see the record after the upload is shared.
+
+## Test on the existing NOMAD 1.4 deployment
+
+Run these commands on `test-nomad` from the active Docker Compose directory, with
+the same project and Compose files you normally use. Extract the plugin ZIP
+somewhere outside that directory and set `registry_src` to its extracted
+`scientific-equipment-registry` folder.
+
+```bash
+registry_src=/absolute/path/to/scientific-equipment-registry
+app_id=$(docker compose ps -q app)
+docker compose exec -T app python -c \
+  "from importlib.metadata import version; print(version('nomad-lab'))"
+
+base_id=$(docker inspect --format '{{.Image}}' "$app_id")
+base_user=$(docker image inspect --format '{{.Config.User}}' "$base_id")
+docker image tag "$base_id" nomad-oasis-local:equipment-test-base
+
+docker build -t nomad-oasis-local:equipment-test \
+  --build-arg "BASE_USER=${base_user:-root}" -f - "$registry_src" <<'DOCKERFILE'
+FROM nomad-oasis-local:equipment-test-base
+ARG BASE_USER=root
+USER root
+COPY pyproject.toml /tmp/equipment-plugin/
+COPY src /tmp/equipment-plugin/src
+RUN if command -v uv >/dev/null 2>&1; then \
+      uv pip install --python "$(command -v python)" --no-deps /tmp/equipment-plugin; \
+    else \
+      python -m pip install --no-deps /tmp/equipment-plugin; \
+    fi && rm -rf /tmp/equipment-plugin
+USER ${BASE_USER}
+DOCKERFILE
 ```
 
-Install the `nomad-lab` package:
-```sh
-uv pip install -e '.[dev]'
+After a successful build, verify the plugin loads in the new image:
+
+```bash
+docker run --rm --entrypoint python nomad-oasis-local:equipment-test -c \
+  'from nomad_equipment_registry import equipment_schema; from nomad_equipment_registry.app import equipment_app; equipment_schema.load(); print(equipment_app.app.label)'
 ```
 
-### Run the tests
+If your deployment has a plugin allowlist, add the two entry points listed
+above before restarting the services. Apply the test image to the existing
+app and worker, then check their logs and reload the proxy once the app is healthy:
 
-You can run locally the tests:
-```sh
-python -m pytest -sv tests
+```bash
+NOMAD_IMAGE=nomad-oasis-local:equipment-test \
+  docker compose up -d --no-deps app worker
+docker compose ps app worker
+docker compose logs --tail=80 app worker
+docker compose exec -T proxy nginx -s reload
 ```
 
-where the `-s` and `-v` options toggle the output verbosity.
-
-Our CI/CD pipeline produces a more comprehensive test report using the `pytest-cov` package. You can generate a local coverage report:
-```sh
-uv pip install pytest-cov
-python -m pytest --cov=src tests
-```
-
-### Run linting and auto-formatting
-
-We use [Ruff](https://docs.astral.sh/ruff/) for linting and formatting the code. Ruff auto-formatting is also a part of the GitHub workflow actions. You can run locally:
-```sh
-ruff check .
-ruff format . --check
-```
-
-### Debugging
-
-For interactive debugging of the tests, use `pytest` with the `--pdb` flag. We recommend using an IDE for debugging, e.g., _VSCode_. If that is the case, add the following snippet to your `.vscode/launch.json`:
-```json
-{
-  "configurations": [
-      {
-        "name": "<descriptive tag>",
-        "type": "debugpy",
-        "request": "launch",
-        "cwd": "${workspaceFolder}",
-        "program": "${workspaceFolder}/.pyenv/bin/pytest",
-        "justMyCode": true,
-        "env": {
-            "_PYTEST_RAISE": "1"
-        },
-        "args": [
-            "-sv",
-            "--pdb",
-            "<path-to-plugin-tests>",
-        ]
-    }
-  ]
-}
-```
-
-where `<path-to-plugin-tests>` must be changed to the local path to the test module to be debugged.
-
-The settings configuration file `.vscode/settings.json` automatically applies the linting and formatting upon saving the modified file.
-
-### Documentation on Github pages
-
-To view the documentation locally, install the related packages using:
-```sh
-uv pip install -r requirements_docs.txt
-```
-
-Run the documentation server:
-```sh
-mkdocs serve
-```
-
-## Adding this plugin to NOMAD
-
-Currently, NOMAD has two distinct flavors that are relevant depending on your role as an user:
-1. [A NOMAD Oasis](#adding-this-plugin-in-your-nomad-oasis): any user with a NOMAD Oasis instance.
-2. [Local NOMAD installation and the source code of NOMAD](#adding-this-plugin-in-your-local-nomad-installation-and-the-source-code-of-nomad): internal developers.
-
-### Adding this plugin in your NOMAD Oasis
-
-Read the [NOMAD plugin documentation](https://nomad-lab.eu/prod/v1/staging/docs/howto/oasis/plugins_install.html) for all details on how to deploy the plugin on your NOMAD instance.
-
-### Adding this plugin in your local NOMAD installation and the source code of NOMAD
-
-We now recommend using the dedicated [`nomad-distro-dev`](https://github.com/FAIRmat-NFDI/nomad-distro-dev) repository to simplify the process. Please refer to that repository for detailed instructions.
-
-## Publish note
-In the [GitHub actions workflow](./.github/workflows/publish.yml) for publishing the scientific-equipment-registry plugin to PyPI, we commented out the `deploy` job . If you want to publish the plugin to `PyPI`, you need to set up your project in `PyPI`. There are several online tutorials on publishing a Python package to PyPI, e.g., [How to Publish a Python Package to PyPI](https://realpython.com/pypi-publish-python-package/). After that, you can uncomment the `deploy` job in the workflow file and push the changes to GitHub. The workflow will be triggered and the package will be published to `PyPI` when you create a new release on GitHub.
-
-### Template update
-
-We use [`cruft`](https://github.com/cruft/cruft) to update the project based on template changes. To run the check for updates locally, run `cruft update` in the root of the project. More details see the instructions on [`cruft` website](https://cruft.github.io/cruft/#updating-a-project).
-
-## Main contributors
-| Name | E-mail     |
-|------|------------|
-| Peter Tiringer | [tiringer@cbs.mpg.de](mailto:tiringer@cbs.mpg.de)
+Roll back by substituting `nomad-oasis-local:equipment-test-base` for the test
+image in the same Compose command and reloading the proxy again. For permanent
+integration, add the plugin to the same image build step as the Scientific Staff
+Database. The test image uses the currently running NOMAD release.
